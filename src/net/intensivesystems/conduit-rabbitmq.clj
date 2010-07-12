@@ -3,39 +3,42 @@
      clojure.test
      [clojure.pprint :only [pprint]]
      [net.intensivesystems.conduit :only [conduit conduit-run new-proc
-                                          new-id seq-fn seq-proc a-run]]
+                                          new-id seq-fn seq-proc a-run
+                                          scatter-gather-fn proc-fn-future
+                                          reply-proc]]
      net.intensivesystems.arrows)
   (:import
      [com.rabbitmq.client Connection ConnectionFactory Channel
       MessageProperties QueueingConsumer]))
 
-(defn rabbitmq-connection [host vhost user password]
-  "Create a simple rabbitmq connection."
-  (.newConnection
-    (doto (ConnectionFactory.)
-      (.setHost host)
-      (.setVirtualHost vhost)
-      (.setUsername user)
-      (.setPassword password))))
+(declare *channel*)
+(declare *exchange*)
 
-(defn rabbitmq-channel [connection exchange queue]
-  (doto (.createChannel connection)
-    (.exchangeDeclare exchange "direct")
-    (.queueDeclare queue false false false {})
-    (.queueBind queue exchange queue)))
+(defn declare-queue [queue]
+    (.queueDeclare *channel* queue false false false {})
+    (.queueBind *channel* queue *exchange* queue))
 
-(declare publish)
-(declare ack-message)
+(defn purge-queue [queue]
+  (.queuePurge *channel* queue))
 
-(defn publish-fn [channel exchange]
-  (fn [queue msg]
-    (let [msg-str (binding [*print-dup* true]
-                    (pr-str msg))]
-      (.basicPublish channel exchange queue
-                     (MessageProperties/PERSISTENT_TEXT_PLAIN)
-                     (.getBytes msg-str)))))
+(defn publish [queue msg]
+  (let [msg-str (binding [*print-dup* true]
+                  (pr-str msg))]
+    (.basicPublish *channel* *exchange* queue
+                   (MessageProperties/PERSISTENT_TEXT_PLAIN)
+                   (.getBytes msg-str))))
 
-(defn rabbit-msgs 
+(defn ack-message [msg]
+  (.basicAck *channel*
+             (.getDeliveryTag (.getEnvelope msg))
+             false))
+
+(defn consumer [queue]
+  (let [consumer (QueueingConsumer. *channel*)]
+    (.basicConsume *channel* queue, false, consumer)
+    consumer))
+
+(defn msg-list 
   ([consumer]
    (if-let [next-msg (try
                        (.nextDelivery consumer)
@@ -44,106 +47,43 @@
      (lazy-seq
        (cons [(read-string (String. (.getBody next-msg)))
               next-msg]
-             (rabbit-msgs consumer)))
-     (rabbit-msgs consumer)))
+             (msg-list consumer)))
+     (msg-list consumer)))
   ([consumer msecs]
    (when-let [next-msg (.nextDelivery consumer msecs)]
      (lazy-seq
        (cons [(read-string (String. (.getBody next-msg)))
               next-msg]
-             (rabbit-msgs consumer msecs))))))
+             (msg-list consumer msecs))))))
 
-(defn ack-message-fn [channel]
-  (fn [msg]
-    (.basicAck channel
-               (.getDeliveryTag (.getEnvelope msg))
-               false)))
-
-(defn drain-queue [channel queue]
-  (let [consumer (QueueingConsumer. channel)
-        ack-message (ack-message-fn channel)]
-
-    (.basicConsume channel queue, false, consumer)
-
-    (dorun (map (fn [[s m]]
-                  (ack-message m)
-                  s)
-                (rabbit-msgs consumer 100)))
-    (.basicCancel channel (.getConsumerTag consumer))))
-
-(deftest test-rabbit-publish-consume
-         (let [exchange "conduit-exchange"
-               queue "test-queue"]
-           (with-open [connection (rabbitmq-connection "localhost" "/" "guest" "guest")
-                       channel (rabbitmq-channel connection exchange queue)]
-             (let [consumer (QueueingConsumer. channel)
-                   ack-message (ack-message-fn channel)]
-
-               (drain-queue channel queue)
-               (dorun
-                 (map (partial (publish-fn channel exchange) queue)
-                      (range 50)))
-
-               (.basicConsume channel queue, false, consumer)
-               (is (= (range 50)
-                      (map (fn [[s m]]
-                             (ack-message m)
-                             s)
-                           (rabbit-msgs consumer 100))))))))
+(defn rabbit-msgs
+  ([queue] (msg-list (consumer queue)))
+  ([queue msecs] (msg-list (consumer queue) msecs)))
 
 (with-arrow conduit
   (defn rabbitmq-handler [p queue]
-    (apply a-select
-           (apply concat
-                  (seq
-                    (dissoc (get-in p [:parts queue])
-                                      :type)))))
+    (->> (dissoc (get-in p [:parts queue]) :type)
+         seq
+         (mapcat (fn [[x f]] [x {:fn f}]))
+         (apply a-select)))
 
   (defmethod conduit-run :rabbitmq [p queue channel exchange]
-    (binding [ack-message (ack-message-fn channel)
-              publish (publish-fn channel exchange)]
-      (let [queue (str queue)
-            consumer (QueueingConsumer. channel)]
-        (.basicConsume channel queue, false, consumer)
+    (binding [*channel* channel
+              *exchange* exchange]
+      (let [queue (str queue)]
         (dorun
           (a-run
             (a-seq (a-nth 0 (rabbitmq-handler p queue))
                    (a-nth 1 (a-arr ack-message)))
-            (rabbit-msgs consumer 100)))))))
+            (rabbit-msgs queue 100)))))))
 
-(defmacro def-rabbitmq [proc-name source proc-fn]
+(defmacro def-rabbitmq [proc-name source old-proc]
   `(def ~proc-name {:type :rabbitmq
-                    :fn ~proc-fn
+                    :fn (:fn ~old-proc)
                     :parts {(str ~source) {:type :rabbitmq
-                                           (str '~proc-name) ~proc-fn}}
+                                           (str '~proc-name) (:fn ~old-proc)}}
                     :source (str ~source)
                     :id (str '~proc-name)}))
-
-(def test-results (atom []))
-(with-arrow conduit
-            (def-rabbitmq test-rabbit 'test-queue
-                          (a-arr (fn [n]
-                                   (swap! test-results conj n)
-                                   n))))
-
-(with-arrow conduit
-  (deftest test-rabbitmq-run
-           (let [exchange "conduit-exchange"
-                 queue "test-queue"]
-             (with-open [connection (rabbitmq-connection "localhost" "/" "guest" "guest")
-                         channel (rabbitmq-channel connection exchange queue)]
-
-               (drain-queue channel queue)
-
-               (dorun
-                 (map (partial (publish-fn channel exchange) queue)
-                      (map (fn [x] ["test-rabbit" x])
-                           (range 10))))
-
-               (reset! test-results [])
-               (conduit-run test-rabbit "test-queue" channel exchange)
-               (is (= (range 10)
-                      @test-results))))))
 
 (defmethod new-proc :rabbitmq [old-rabbitmq new-fn]
   (let [id (new-id)]
@@ -153,10 +93,9 @@
              :fn new-fn))))
 
 (defn publisher [p]
-  (partial (fn [f x]
-             (println "rabbitmq:" (:source p) [(:id p) x])
-             (f x))
-           (:fn p)))
+  (fn this-fn [x]
+    (publish (:source p) [(:id p) x])
+    [[] this-fn]))
 
 (defmethod seq-proc :rabbitmq [p1 p2]
   (let [id (new-id)
@@ -171,31 +110,94 @@
            :parts new-parts)))
 
 #_(defmethod scatter-gather-fn :rabbitmq [p]
-  (partial proc-fn-future (:fn p)))
+  (fn [x]
+    create-reply-queue
+    (publish (:source p2) [x reply-queue])
+    return future that waits on reply
+    ))
 
-(deftest test-new-rabbitmq
-         (is (= {:fn :new-fn
-                 :source :src
-                 :type :rabbitmq
-                 :id :g
-                 :parts {:src {:g :new-fn, :first :f1}}}
-                (binding [new-id (constantly :g)]
-                  (new-proc {:source :src
-                             :type :rabbitmq
-                             :id :first
-                             :parts {:src {:first :f1}}}
-                            :new-fn)))))
+(defmethod reply-proc :rabbitmq [p]
+  (new-proc p
+            (partial (fn this-fn [f [x reply-queue]]
+                       (let [[new-x new-f] (f x)]
+                         (publish reply-queue new-x)
+                         [[] (partial this-fn new-f)]))
+                     (:fn p))))
 
-(def-rabbitmq p1 'p1-source
-        (comp vector dec))
+(defn rabbitmq-connection [host vhost user password]
+  "Create a simple rabbitmq connection."
+  (.newConnection
+    (doto (ConnectionFactory.)
+      (.setHost host)
+      (.setVirtualHost vhost)
+      (.setUsername user)
+      (.setPassword password))))
 
-(def-rabbitmq p2 'p2-source
-        (comp vector (partial + 3)))
+(defn rabbitmq-test-fixture [f]
+  (with-open [connection (rabbitmq-connection "localhost" "/" "guest" "guest")
+              channel (.createChannel connection)]
+    (binding [*channel* channel
+              *exchange* "conduit-exchange"
+              *queue* "test-queue"]
+      (.exchangeDeclare channel *exchange* "direct")
+      (declare-queue *queue*)
+      (purge-queue *queue*)
+      (f))))
 
-(def p3 (seq-proc p1 p2))
-#_(println (a-run p3 [1 2 3]))
+(use-fixtures :each rabbitmq-test-fixture)
 
-(def p4 (seq-proc p2 p1))
-#_(println (a-run p4 [1 2 3]))
+(def test-results (atom []))
+(with-arrow conduit
+            (def-rabbitmq test-rabbit 'test-queue
+                          (a-arr (fn [n]
+                                   (swap! test-results conj n)
+                                   n))))
+
+(deftest test-rabbit-publish-consume
+         (dorun
+           (map (partial publish *queue*)
+                (range 50)))
+
+         (is (= (range 50)
+                (map (fn [[s m]]
+                       (ack-message m)
+                       s)
+                     (rabbit-msgs *queue* 100)))))
+
+(deftest test-rabbitmq-run
+         (dorun
+           (map (partial publish *queue*)
+                (map (fn [x] ["test-rabbit" x])
+                     (range 10))))
+
+         (reset! test-results [])
+         (conduit-run test-rabbit *queue* *channel* *exchange*)
+         (is (= (range 10)
+                @test-results)))
+
+(deftest test-new-proc
+        (let [new-rabbit (new-proc test-rabbit (fn this-fn [n]
+                                                 (swap! test-results conj (inc n))
+                                                 [[(inc n)] this-fn]))]
+          (dorun
+            (map (partial publish *queue*)
+                 (map (fn [x] [(:id new-rabbit) x])
+                      (range 10))))
+
+          (reset! test-results [])
+          (conduit-run new-rabbit *queue* *channel* *exchange*)
+          (is (= (range 1 11)
+                 @test-results))))
+
+(deftest test-seq-proc
+        (let [new-rabbit (with-arrow conduit
+                                     (a-seq (a-arr inc)
+                                            test-rabbit))]
+          (a-run new-rabbit (range 10))
+
+          (reset! test-results [])
+          (conduit-run new-rabbit *queue* *channel* *exchange*)
+          (is (= (range 1 11)
+                 @test-results))))
 
 (run-tests)
