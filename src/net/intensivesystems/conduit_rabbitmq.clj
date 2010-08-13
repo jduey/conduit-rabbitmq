@@ -6,13 +6,15 @@
                                           reply-proc constant-stream]]
      net.intensivesystems.arrows)
   (:import
+     [com.rabbitmq.client Connection ConnectionFactory Channel
+                          MessageProperties QueueingConsumer]
      [java.util UUID]))
 
 (declare *channel*)
 (declare *exchange*)
 
 (defn declare-queue [queue]
-    (.queueDeclare *channel* queue false false false {})
+    (.queueDeclare *channel* queue false false false false {})
     (.queueBind *channel* queue *exchange* queue))
 
 (defn purge-queue [queue]
@@ -123,7 +125,7 @@
 (defmethod scatter-gather-fn :rabbitmq [p]
   (fn this-fn [x]
     (let [reply-queue (str (UUID/randomUUID))]
-      (.queueDeclare *channel* reply-queue false false false {})
+      (.queueDeclare *channel* reply-queue false false false false {})
       (.queueBind *channel* reply-queue *exchange* reply-queue)
       (publish (:source p) [(:id p) [x reply-queue]])
       (fn []

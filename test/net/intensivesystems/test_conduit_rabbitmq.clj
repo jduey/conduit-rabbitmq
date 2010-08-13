@@ -2,15 +2,24 @@
   (:use net.intensivesystems.conduit-rabbitmq :reload-all)
   (:use
      clojure.test
-     [net.intensivesystems.conduit :only [conduit conduit-run
+     [net.intensivesystems.conduit :only [conduit conduit-run a-run
                                           new-proc constant-stream]]
      net.intensivesystems.arrows)
   (:import
-     [com.rabbitmq.client ConnectionFactory]))
+     [com.rabbitmq.client ConnectionParameters ConnectionFactory]))
 
 (defn rabbitmq-connection [host vhost user password]
   "Create a simple rabbitmq connection."
-  (.newConnection
+  ;; for rabbitmq client 1.7.2
+  (let [params (doto (ConnectionParameters.)
+                 (.setVirtualHost "/")
+                 (.setUsername "guest")
+                 (.setPassword "guest"))
+        factory (ConnectionFactory. params)]
+    (.newConnection factory "localhost"))
+
+  ;; for rabbitmq client 1.8.0
+  #_(.newConnection
     (doto (ConnectionFactory.)
       (.setHost host)
       (.setVirtualHost vhost)
