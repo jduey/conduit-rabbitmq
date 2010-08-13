@@ -1,4 +1,4 @@
-(defproject net/intensivesystems/conduit_rabbitmq "0.5.0-SNAPSHOT"
+(defproject net.intensivesystems/conduit-rabbitmq "0.5.0-SNAPSHOT"
   :description "FIXME: write"
   :dependencies [[org.clojure/clojure "1.2.0-master-SNAPSHOT"]
                  [org.clojure/clojure-contrib "1.2.0-SNAPSHOT"]
