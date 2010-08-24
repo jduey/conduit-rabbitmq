@@ -2,8 +2,8 @@
   (:use net.intensivesystems.conduit-rabbitmq :reload-all)
   (:use
      clojure.test
-     [net.intensivesystems.conduit :only [conduit conduit-run a-run
-                                          new-proc constant-stream]]
+     [net.intensivesystems.conduit :only [conduit a-run
+                                          new-proc conduit-seq]]
      net.intensivesystems.arrows)
   (:import
      [com.rabbitmq.client ConnectionParameters ConnectionFactory]))
@@ -43,8 +43,11 @@
 (use-fixtures :each rabbitmq-test-fixture)
 
 (def test-results (atom []))
-(def test-rabbit (rabbitmq-arr 'test-queue
-                               identity))
+(def test-rabbit
+  (rabbitmq-arr 'test-queue
+                 (fn [x]
+                   (swap! test-results conj x)
+                   x)))
 
 (with-arrow conduit
             (deftest test-rabbit-publish-consume
@@ -64,62 +67,68 @@
                             (map (fn [x] [(:id test-rabbit) x])
                                  (range 10))))
 
+                     (reset! test-results [])
+                     (rabbitmq-run test-rabbit *queue* *channel* *exchange* 100)
                      (is (= (range 10)
-                            (conduit-run test-rabbit *queue* *channel* *exchange* 100))))
+                            @test-results)))
 
             (deftest test-new-proc
                      (let [new-rabbit (new-proc test-rabbit
                                                 (fn this-fn [n]
+                                                  (swap! test-results conj (inc n))
                                                   [[(inc n)] this-fn]))]
                        (dorun
                          (map (partial publish *queue*)
                               (map (fn [x] [(:id new-rabbit) x])
                                    (range 10))))
 
-
+                       (reset! test-results [])
+                       (rabbitmq-run new-rabbit *queue* *channel* *exchange* 100)
                        (is (= (range 1 11)
-                              (conduit-run new-rabbit *queue* *channel* *exchange* 100)))))
+                              @test-results))))
 
-                     (deftest test-seq-proc
-                              (let [new-rabbit (a-seq (a-arr inc)
-                                                      test-rabbit)]
-                                (a-run (a-seq (constant-stream (range 10))
-                                              new-rabbit))
+            (deftest test-seq-proc
+                     (let [new-rabbit (a-seq (a-arr inc)
+                                             test-rabbit)]
+                       (a-run (a-seq (conduit-seq (range 10))
+                                     new-rabbit))
 
-                                (is (= (range 1 11)
-                                       (conduit-run new-rabbit *queue* *channel* *exchange* 100)))))
+                       (reset! test-results [])
+                       (rabbitmq-run new-rabbit *queue* *channel* *exchange* 100)
+                       (is (= (range 1 11)
+                              @test-results))))
 
-                     (deftest test-par-proc
-                              (let [p1 (rabbitmq-arr *queue* inc)
-                                    p2 (rabbitmq-arr *queue* dec)
-                                    new-rabbit (a-all p1 p2)
-                                    thread-fn (fn [exchange queue]
-                                                (with-open [connection (rabbitmq-connection "localhost" "/" "guest" "guest")
-                                                            channel (.createChannel connection)]
-                                                  (binding [*channel* channel
-                                                            *exchange* exchange]
-                                                    (let [queue (str queue)]
-                                                      (a-run
-                                                        (a-seq (msg-stream queue)
-                                                               (a-arr (fn [m]
-                                                                        [(read-msg m) m]))
-                                                               (a-nth 0 (rabbitmq-handler new-rabbit queue))
-                                                               (a-nth 1 (a-arr ack-message))))))))
+            (deftest test-par-proc
+                       (let [p1 (rabbitmq-arr *queue* inc)
+                             p2 (rabbitmq-arr *queue* dec)
+                             new-rabbit (a-all p1 p2)
+                             thread-fn (fn [exchange queue]
+                                         (with-open [connection (rabbitmq-connection "localhost" "/" "guest" "guest")
+                                                     channel (.createChannel connection)]
+                                           (binding [*channel* channel
+                                                     *exchange* exchange]
+                                             (let [queue (str queue)]
+                                               (a-run
+                                                 (a-seq (msg-stream queue)
+                                                        (a-arr (fn [m]
+                                                                 [(read-msg m) m]))
+                                                        (a-nth 0 (rabbitmq-handler new-rabbit queue))
+                                                        (a-nth 1 (a-arr ack-message))))))))
 
-                                    remote-thread (doto (new Thread (partial thread-fn *exchange* *queue*))
-                                                    (.start))]
+                             remote-thread (doto (new Thread (partial thread-fn *exchange* *queue*))
+                                             (.start))]
 
-                                (try
-                                  (is (= (map vector
-                                              (range 1 11)
-                                              (range -1 9))
-                                         (a-run (a-seq (constant-stream (range 10))
-                                                       new-rabbit )))) 
-                                  (finally
-                                    (Thread/sleep 500)
-                                    (.interrupt remote-thread)
-                                    (println "waiting...")
-                                    (.join remote-thread 5000)
-                                    (println "done waiting"))))))
+                         (try
+                           (is (= (map vector
+                                       (range 1 11)
+                                       (range -1 9))
+                                  (a-run (a-seq (conduit-seq (range 10))
+                                                new-rabbit )))) 
+                           (finally
+                             (Thread/sleep 500)
+                             (.interrupt remote-thread)
+                             (println "waiting...")
+                             (.join remote-thread 5000)
+                             (println "done waiting"))))))
 
 (run-tests)

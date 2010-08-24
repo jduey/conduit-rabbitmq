@@ -1,21 +1,21 @@
 (ns net.intensivesystems.conduit-rabbitmq
   (:use
-     [net.intensivesystems.conduit :only [conduit conduit-run new-proc
+     [net.intensivesystems.conduit :only [conduit new-proc
                                           new-id seq-fn seq-proc a-run
                                           scatter-gather-fn
-                                          reply-proc constant-stream]]
+                                          reply-proc pass-through]]
      net.intensivesystems.arrows)
   (:import
-     [com.rabbitmq.client Connection ConnectionFactory Channel
-                          MessageProperties QueueingConsumer]
-     [java.util UUID]))
+   [com.rabbitmq.client Connection ConnectionFactory Channel
+    MessageProperties QueueingConsumer]
+   [java.util UUID]))
 
 (declare *channel*)
 (declare *exchange*)
 
 (defn declare-queue [queue]
-    (.queueDeclare *channel* queue false false false false {})
-    (.queueBind *channel* queue *exchange* queue))
+  (.queueDeclare *channel* queue false false false false {})
+  (.queueBind *channel* queue *exchange* queue))
 
 (defn purge-queue [queue]
   (.queuePurge *channel* queue))
@@ -42,68 +42,73 @@
 
 (defn get-msg
   ([queue] (try
-             (.nextDelivery (consumer queue))
-             (catch InterruptedException e
-               nil)))
+            (.nextDelivery (consumer queue))
+            (catch InterruptedException e
+              nil)))
   ([queue msecs] (.nextDelivery (consumer queue) msecs)))
 
-(defn msg-stream 
+(defn msg-stream
   ([queue]
-   (let [consumer (consumer queue)]
-     {:type :rabbitmq
-      :fn (fn this-fn [x]
-            (try
-              [[(.nextDelivery consumer)] this-fn] 
-              (catch InterruptedException e
-                nil)))}))
+     (let [consumer (consumer queue)]
+       {:type :rabbitmq
+        :fn (fn this-fn [x]
+              (try
+               (let [msg (.nextDelivery consumer)]
+                 [[msg] this-fn])
+               (catch InterruptedException e
+                 nil)))}))
   ([queue msecs]
-   (let [consumer (consumer queue)]
-     {:type :rabbitmq
-      :fn (fn this-fn [x]
-            (let [msg (.nextDelivery consumer msecs)]
-              (when msg
-                [[msg] this-fn])))})))
+     (let [consumer (consumer queue)]
+       {:type :rabbitmq
+        :fn (fn this-fn [x]
+              (let [msg (.nextDelivery consumer msecs)]
+                (when msg
+                  [[msg] this-fn])))})))
 
-(defn rabbitmq-proc [source proc-fn]
-    (let [id (new-id)
-          source (str source)]
-      {:type :rabbitmq
-       :fn proc-fn
-       :parts {source {:type :rabbitmq
-                             id proc-fn}}
-       :source source
-       :id id}))
+(defn a-rabbitmq [source proc]
+  (let [id (new-id)
+        source (str source)]
+    {:type :rabbitmq
+     :fn (:fn proc)
+     :parts {source {:type :rabbitmq
+                     id proc}}
+     :source source
+     :id id}))
 
 (with-arrow conduit
   (defn rabbitmq-handler [p queue]
-    (->> (dissoc (get-in p [:parts queue]) :type)
-         seq
-         (mapcat (fn [[x f]] [x {:fn f}]))
-         (apply a-select)))
+    (let [h (->> (dissoc (get-in p [:parts queue]) :type)
+               seq
+               (mapcat (fn [[x p]]
+                         [x p]))
+               (apply a-select))]
+      h))
 
-  (defmethod conduit-run :rabbitmq [p queue channel exchange & [msecs]]
+  (defn rabbitmq-run [p queue channel exchange & [msecs]]
     (binding [*channel* channel
               *exchange* exchange]
       (let [queue (str queue)]
-        (a-run
-          (a-seq (if msecs
-                   (msg-stream queue msecs)
-                   (msg-stream queue))
-                 (a-arr (fn [m]
-                          [(read-msg m) m]))
-                 (a-nth 0 (rabbitmq-handler p queue))
-                 (a-nth 1 (a-arr ack-message))
-                 (a-arr first))))))
-            
+        (dorun (a-run
+                (a-seq (if msecs
+                         (msg-stream queue msecs)
+                         (msg-stream queue))
+                       #_(a-all (a-arr read-msg)
+                              pass-through)
+                       (a-arr (fn [m]
+                                [(read-msg m) m]))
+                       (a-nth 0 (rabbitmq-handler p queue))
+                       (a-nth 1 (a-arr ack-message))
+                       (a-arr first)))))))
+
   (defn rabbitmq-arr [source f]
-    (rabbitmq-proc source (:fn (a-arr f)))))
+    (a-rabbitmq source (a-arr f))))
 
 (defmethod new-proc :rabbitmq [old-rabbitmq new-fn]
   (let [id (new-id)]
     (-> old-rabbitmq
-      (assoc-in [:parts (:source old-rabbitmq) id] new-fn)
-      (assoc :id id
-             :fn new-fn))))
+        (assoc-in [:parts (:source old-rabbitmq) id] {:fn new-fn})
+        (assoc :id id
+               :fn new-fn))))
 
 (defn publisher [p]
   (fn this-fn [x]
@@ -114,13 +119,14 @@
   (let [id (new-id)
         new-fn (seq-fn (:fn p1) (publisher p2))
         new-parts (merge-with merge
-                              {(:source p1) {id new-fn}}
+                              (when (contains? p1 :source)
+                                {(:source p1) {id new-fn}})
                               (:parts p1)
                               (:parts p2))]
     (assoc p1
-           :id id
-           :fn new-fn
-           :parts new-parts)))
+      :id id
+      :fn new-fn
+      :parts new-parts)))
 
 (defmethod scatter-gather-fn :rabbitmq [p]
   (fn this-fn [x]
