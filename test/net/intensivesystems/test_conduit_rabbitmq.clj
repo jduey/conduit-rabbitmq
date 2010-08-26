@@ -56,7 +56,7 @@
                             (range 50)))
 
                      (is (= (range 50)
-                            (a-run (a-seq (msg-stream *queue* 100)
+                            (a-run (a-comp (msg-stream *queue* 100)
                                           (a-arr (fn [m]
                                                    (ack-message m)
                                                    (read-msg m))))))))
@@ -88,9 +88,9 @@
                               @test-results))))
 
             (deftest test-seq-proc
-                     (let [new-rabbit (a-seq (a-arr inc)
+                     (let [new-rabbit (a-comp (a-arr inc)
                                              test-rabbit)]
-                       (a-run (a-seq (conduit-seq (range 10))
+                       (a-run (a-comp (conduit-seq (range 10))
                                      new-rabbit))
 
                        (reset! test-results [])
@@ -109,7 +109,7 @@
                                                      *exchange* exchange]
                                              (let [queue (str queue)]
                                                (a-run
-                                                 (a-seq (msg-stream queue)
+                                                 (a-comp (msg-stream queue)
                                                         (a-arr (fn [m]
                                                                  [(read-msg m) m]))
                                                         (a-nth 0 (rabbitmq-handler new-rabbit queue))
@@ -122,7 +122,7 @@
                            (is (= (map vector
                                        (range 1 11)
                                        (range -1 9))
-                                  (a-run (a-seq (conduit-seq (range 10))
+                                  (a-run (a-comp (conduit-seq (range 10))
                                                 new-rabbit )))) 
                            (finally
                              (Thread/sleep 500)

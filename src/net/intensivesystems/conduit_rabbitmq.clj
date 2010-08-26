@@ -89,7 +89,7 @@
               *exchange* exchange]
       (let [queue (str queue)]
         (dorun (a-run
-                (a-seq (if msecs
+                (a-comp (if msecs
                          (msg-stream queue msecs)
                          (msg-stream queue))
                        #_(a-all (a-arr read-msg)
