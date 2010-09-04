@@ -1,10 +1,10 @@
-(ns net.intensivesystems.test-conduit-rabbitmq
-  (:use net.intensivesystems.conduit-rabbitmq :reload-all)
+(ns test-conduit-rabbitmq
+  (:use conduit-rabbitmq :reload-all)
   (:use
      clojure.test
-     [net.intensivesystems.conduit :only [conduit a-run
-                                          new-proc conduit-seq]]
-     net.intensivesystems.arrows)
+     [conduit :only [conduit a-run
+                     new-proc conduit-seq]]
+     arrows)
   (:import
      [com.rabbitmq.client ConnectionParameters ConnectionFactory]))
 

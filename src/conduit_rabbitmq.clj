@@ -1,10 +1,10 @@
-(ns net.intensivesystems.conduit-rabbitmq
+(ns conduit-rabbitmq
   (:use
-     [net.intensivesystems.conduit :only [conduit new-proc
-                                          new-id seq-fn seq-proc a-run
-                                          scatter-gather-fn
-                                          reply-proc pass-through]]
-     net.intensivesystems.arrows)
+     [conduit :only [conduit new-proc
+                     new-id seq-fn seq-proc a-run
+                     scatter-gather-fn
+                     reply-proc pass-through]]
+     arrows)
   (:import
    [com.rabbitmq.client Connection ConnectionFactory Channel
     MessageProperties QueueingConsumer]
