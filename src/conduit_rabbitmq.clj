@@ -89,16 +89,14 @@
               *exchange* exchange]
       (let [queue (str queue)]
         (dorun (a-run
-                (a-comp (if msecs
-                         (msg-stream queue msecs)
-                         (msg-stream queue))
-                       #_(a-all (a-arr read-msg)
-                              pass-through)
-                       (a-arr (fn [m]
-                                [(read-msg m) m]))
-                       (a-nth 0 (rabbitmq-handler p queue))
-                       (a-nth 1 (a-arr ack-message))
-                       (a-arr first)))))))
+                 (a-comp (if msecs
+                           (msg-stream queue msecs)
+                           (msg-stream queue))
+                         (a-all (a-arr read-msg)
+                                pass-through)
+                         (a-nth 0 (rabbitmq-handler p queue))
+                         (a-nth 1 (a-arr ack-message))
+                         (a-arr first)))))))
 
   (defn rabbitmq-arr [source f]
     (a-rabbitmq source (a-arr f))))
@@ -131,7 +129,7 @@
 (defmethod scatter-gather-fn :rabbitmq [p]
   (fn this-fn [x]
     (let [reply-queue (str (UUID/randomUUID))]
-      (.queueDeclare *channel* reply-queue false false false false {})
+      (.queueDeclare *channel* reply-queue false false false true {})
       (.queueBind *channel* reply-queue *exchange* reply-queue)
       (publish (:source p) [(:id p) [x reply-queue]])
       (fn []
