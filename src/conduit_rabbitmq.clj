@@ -1,6 +1,6 @@
 (ns conduit-rabbitmq
   (:use
-     [conduit :only [conduit new-proc
+     [conduit :only [conduit new-proc run-proc
                      new-id seq-fn seq-proc a-run
                      scatter-gather-fn
                      reply-proc pass-through]]
@@ -47,23 +47,23 @@
               nil)))
   ([queue msecs] (.nextDelivery (consumer queue) msecs)))
 
-(defn msg-stream
-  ([queue]
-     (let [consumer (consumer queue)]
-       {:type :rabbitmq
-        :fn (fn this-fn [x]
-              (try
-               (let [msg (.nextDelivery consumer)]
-                 [[msg] this-fn])
-               (catch InterruptedException e
-                 nil)))}))
-  ([queue msecs]
-     (let [consumer (consumer queue)]
-       {:type :rabbitmq
-        :fn (fn this-fn [x]
-              (let [msg (.nextDelivery consumer msecs)]
-                (when msg
-                  [[msg] this-fn])))})))
+(defn msg-stream [queue & [msecs]]
+  (let [consumer (consumer queue)]
+    (if msecs
+      (fn this-fn1 [x]
+        (let [msg (.nextDelivery consumer msecs)]
+          (when msg
+            [[msg] this-fn1])))
+      (fn this-fn2 [x]
+        (try
+          (let [msg (.nextDelivery consumer)]
+            [[msg] this-fn2])
+          (catch InterruptedException e
+            nil))))))
+
+(defn msg-stream-proc [queue & [msecs]]
+  {:type :rabbitmq
+   :fn (msg-stream queue msecs)})
 
 (defn a-rabbitmq [source proc]
   (let [id (new-id)
@@ -75,29 +75,21 @@
      :source source
      :id id}))
 
+(defn rabbitmq-run [p queue channel exchange & [msecs]]
+  (binding [*channel* channel
+            *exchange* exchange]
+    (let [queue (str queue)
+          get-next (msg-stream queue msecs)]
+      (when-let [handler-map (get-in p [:parts queue])]
+        (loop [[[raw-msg] get-next] (get-next nil)]
+          (when raw-msg
+            (let [[target msg] (read-msg raw-msg)]
+              (when-let [handler (get handler-map target)]
+                ((:fn handler) msg))
+              (ack-message raw-msg)
+              (recur (get-next nil)))))))))
+
 (with-arrow conduit
-  (defn rabbitmq-handler [p queue]
-    (let [h (->> (dissoc (get-in p [:parts queue]) :type)
-               seq
-               (mapcat (fn [[x p]]
-                         [x p]))
-               (apply a-select))]
-      h))
-
-  (defn rabbitmq-run [p queue channel exchange & [msecs]]
-    (binding [*channel* channel
-              *exchange* exchange]
-      (let [queue (str queue)]
-        (dorun (a-run
-                 (a-comp (if msecs
-                           (msg-stream queue msecs)
-                           (msg-stream queue))
-                         (a-all (a-arr read-msg)
-                                pass-through)
-                         (a-nth 0 (rabbitmq-handler p queue))
-                         (a-nth 1 (a-arr ack-message))
-                         (a-arr first)))))))
-
   (defn rabbitmq-arr [source f]
     (a-rabbitmq source (a-arr f))))
 

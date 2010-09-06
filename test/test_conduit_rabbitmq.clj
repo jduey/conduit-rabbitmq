@@ -2,7 +2,8 @@
   (:use conduit-rabbitmq :reload-all)
   (:use
      clojure.test
-     [conduit :only [conduit a-run
+     [conduit :only [conduit a-run run-proc
+                     conduit-map
                      new-proc conduit-seq]]
      arrows)
   (:import
@@ -56,7 +57,7 @@
                             (range 50)))
 
                      (is (= (range 50)
-                            (a-run (a-comp (msg-stream *queue* 100)
+                            (a-run (a-comp (msg-stream-proc *queue* 100)
                                           (a-arr (fn [m]
                                                    (ack-message m)
                                                    (read-msg m))))))))
@@ -105,16 +106,7 @@
                              thread-fn (fn [exchange queue]
                                          (with-open [connection (rabbitmq-connection "localhost" "/" "guest" "guest")
                                                      channel (.createChannel connection)]
-                                           (binding [*channel* channel
-                                                     *exchange* exchange]
-                                             (let [queue (str queue)]
-                                               (a-run
-                                                 (a-comp (msg-stream queue)
-                                                        (a-arr (fn [m]
-                                                                 [(read-msg m) m]))
-                                                        (a-nth 0 (rabbitmq-handler new-rabbit queue))
-                                                        (a-nth 1 (a-arr ack-message))))))))
-
+                                           (rabbitmq-run new-rabbit queue channel exchange)))
                              remote-thread (doto (new Thread (partial thread-fn *exchange* *queue*))
                                              (.start))]
 
@@ -122,13 +114,13 @@
                            (is (= (map vector
                                        (range 1 11)
                                        (range -1 9))
-                                  (a-run (a-comp (conduit-seq (range 10))
-                                                new-rabbit )))) 
+                                  (conduit-map new-rabbit (range 10))))
                            (finally
                              (Thread/sleep 500)
                              (.interrupt remote-thread)
-                             (println "waiting...")
-                             (.join remote-thread 5000)
-                             (println "done waiting"))))))
+                             (.join remote-thread 5000))))))
 
+
+
+                                               
 (run-tests)
