@@ -4,7 +4,9 @@
      clojure.test
      [conduit :only [conduit a-run run-proc
                      conduit-map
-                     new-proc conduit-seq]]
+                     new-proc conduit-seq
+                     test-conduit
+                     test-conduit-fn]]
      arrows)
   (:import
      [com.rabbitmq.client ConnectionParameters ConnectionFactory]))
@@ -120,6 +122,19 @@
                              (.interrupt remote-thread)
                              (.join remote-thread 5000))))))
 
+(deftest test-test
+         (let [test-proc (with-arrow conduit
+                                     (a-comp
+                                       (a-arr inc)
+                                       (a-rabbitmq "bogus-queue"
+                                                   (a-arr (partial * 2)))))
+               test-fn (test-conduit-fn test-proc)]
+           
+           (is (= [8 10 12 14]
+                  (mapcat test-fn (range 3 7))))
+           (is (= [8 10 12 14]
+                  (conduit-map (test-conduit test-proc)
+                               (range 3 7))))))
 
 
                                                

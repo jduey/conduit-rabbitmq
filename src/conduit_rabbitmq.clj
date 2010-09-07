@@ -68,12 +68,12 @@
 (defn a-rabbitmq [source proc]
   (let [id (new-id)
         source (str source)]
-    {:type :rabbitmq
-     :fn (:fn proc)
-     :parts {source {:type :rabbitmq
-                     id proc}}
-     :source source
-     :id id}))
+    (assoc proc
+           :type :rabbitmq
+           :parts {source {:type :rabbitmq
+                           id proc}}
+           :source source
+           :id id)))
 
 (defn rabbitmq-run [p queue channel exchange & [msecs]]
   (binding [*channel* channel
