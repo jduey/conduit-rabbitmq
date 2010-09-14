@@ -2,11 +2,7 @@
   (:use conduit-rabbitmq :reload-all)
   (:use
      clojure.test
-     [conduit :only [conduit a-run run-proc
-                     conduit-map
-                     new-proc conduit-seq
-                     test-conduit
-                     test-conduit-fn]]
+     conduit
      arrows)
   (:import
      [com.rabbitmq.client ConnectionParameters ConnectionFactory]))
@@ -46,13 +42,15 @@
 (use-fixtures :each rabbitmq-test-fixture)
 
 (def test-results (atom []))
-(def test-rabbit
-  (rabbitmq-arr 'test-queue
-                 (fn [x]
-                   (swap! test-results conj x)
-                   x)))
 
 (with-arrow conduit
+            (def test-rabbit
+              (a-rabbitmq "test-queue"
+                          "test-rabbit"
+                          (a-arr (fn [x]
+                                   (swap! test-results conj x)
+                                   x))))
+
             (deftest test-rabbit-publish-consume
                      (dorun
                        (map (partial publish *queue*)
@@ -60,9 +58,9 @@
 
                      (is (= (range 50)
                             (a-run (a-comp (msg-stream-proc *queue* 100)
-                                          (a-arr (fn [m]
-                                                   (ack-message m)
-                                                   (read-msg m))))))))
+                                           (a-arr (fn [m]
+                                                    (ack-message m)
+                                                    (read-msg m))))))))
 
             (deftest test-rabbitmq-run
                      (dorun
@@ -75,26 +73,11 @@
                      (is (= (range 10)
                             @test-results)))
 
-            (deftest test-new-proc
-                     (let [new-rabbit (new-proc test-rabbit
-                                                (fn this-fn [n]
-                                                  (swap! test-results conj (inc n))
-                                                  [[(inc n)] this-fn]))]
-                       (dorun
-                         (map (partial publish *queue*)
-                              (map (fn [x] [(:id new-rabbit) x])
-                                   (range 10))))
-
-                       (reset! test-results [])
-                       (rabbitmq-run new-rabbit *queue* *channel* *exchange* 100)
-                       (is (= (range 1 11)
-                              @test-results))))
-
             (deftest test-seq-proc
                      (let [new-rabbit (a-comp (a-arr inc)
-                                             test-rabbit)]
+                                              test-rabbit)]
                        (a-run (a-comp (conduit-seq (range 10))
-                                     new-rabbit))
+                                      new-rabbit))
 
                        (reset! test-results [])
                        (rabbitmq-run new-rabbit *queue* *channel* *exchange* 100)
@@ -102,39 +85,47 @@
                               @test-results))))
 
             (deftest test-par-proc
-                       (let [p1 (rabbitmq-arr *queue* inc)
-                             p2 (rabbitmq-arr *queue* dec)
-                             new-rabbit (a-all p1 p2)
-                             thread-fn (fn [exchange queue]
-                                         (with-open [connection (rabbitmq-connection "localhost" "/" "guest" "guest")
-                                                     channel (.createChannel connection)]
-                                           (rabbitmq-run new-rabbit queue channel exchange)))
-                             remote-thread (doto (new Thread (partial thread-fn *exchange* *queue*))
-                                             (.start))]
+                     (let [p1 (a-rabbitmq *queue* "a-inc" (a-arr inc))
+                           p2 (a-rabbitmq *queue* "a-dec" (a-arr dec))
+                           new-rabbit (a-all p1 p2)
+                           thread-fn (fn [exchange queue]
+                                       (with-open [connection (rabbitmq-connection "localhost" "/" "guest" "guest")
+                                                   channel (.createChannel connection)]
+                                         (rabbitmq-run new-rabbit queue channel exchange)))
+                           remote-thread (doto (new Thread (partial thread-fn *exchange* *queue*))
+                                           (.start))]
+                       (try
+                         (is (= (map vector
+                                     (range 1 11)
+                                     (range -1 9))
+                                (conduit-map new-rabbit (range 10))))
+                         (finally
+                           (Thread/sleep 500)
+                           (.interrupt remote-thread)
+                           (.join remote-thread 5000)))))
 
-                         (try
-                           (is (= (map vector
-                                       (range 1 11)
-                                       (range -1 9))
-                                  (conduit-map new-rabbit (range 10))))
-                           (finally
-                             (Thread/sleep 500)
-                             (.interrupt remote-thread)
-                             (.join remote-thread 5000))))))
-
-(deftest test-test
-         (let [test-proc (with-arrow conduit
-                                     (a-comp
+            (deftest test-test
+                     (let [test-proc (a-comp
                                        (a-arr inc)
                                        (a-rabbitmq "bogus-queue"
-                                                   (a-arr (partial * 2)))))
-               test-fn (test-conduit-fn test-proc)]
-           
-           (is (= [8 10 12 14]
-                  (mapcat test-fn (range 3 7))))
-           (is (= [8 10 12 14]
-                  (conduit-map (test-conduit test-proc)
-                               (range 3 7))))))
+                                                   "a-double"
+                                                   (a-arr (partial * 2))))
+                           sel-test (a-comp
+                                      (a-all (a-arr even?)
+                                             pass-through)
+                                      (a-select true test-proc
+                                                false pass-through))
+                           test-fn (test-conduit-fn test-proc)]
+
+                       (is (= [8 10 12 14]
+                              (mapcat test-fn (range 3 7))))
+                       (is (= [8 10 12 14]
+                              (conduit-map (test-conduit test-proc)
+                                           (range 3 7))))
+                       (is (= [2 1 6 3 10 5 14]
+                              (conduit-map (test-conduit sel-test)
+                                           (range 7)))))))
+
 
 
                                                

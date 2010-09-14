@@ -1,10 +1,6 @@
 (ns conduit-rabbitmq
   (:use
-     [conduit :only [conduit new-proc run-proc
-                     new-id seq-fn seq-proc a-run
-                     scatter-gather-fn
-                     reply-proc pass-through]]
-     arrows)
+     conduit)
   (:import
    [com.rabbitmq.client Connection ConnectionFactory Channel
     MessageProperties QueueingConsumer]
@@ -65,9 +61,8 @@
   {:type :rabbitmq
    :fn (msg-stream queue msecs)})
 
-(defn a-rabbitmq [source proc]
-  (let [id (new-id)
-        source (str source)]
+(defn a-rabbitmq [source id proc]
+  (let [source (str source)]
     (assoc proc
            :type :rabbitmq
            :parts {source {:type :rabbitmq
@@ -84,21 +79,11 @@
         (loop [[[raw-msg] get-next] (get-next nil)]
           (when raw-msg
             (let [[target msg] (read-msg raw-msg)]
-              (when-let [handler (get handler-map target)]
-                ((:fn handler) msg))
-              (ack-message raw-msg)
+              (try
+                (when-let [handler (get handler-map target)]
+                  ((:fn handler) msg))
+                (ack-message raw-msg))
               (recur (get-next nil)))))))))
-
-(with-arrow conduit
-  (defn rabbitmq-arr [source f]
-    (a-rabbitmq source (a-arr f))))
-
-(defmethod new-proc :rabbitmq [old-rabbitmq new-fn]
-  (let [id (new-id)]
-    (-> old-rabbitmq
-        (assoc-in [:parts (:source old-rabbitmq) id] {:fn new-fn})
-        (assoc :id id
-               :fn new-fn))))
 
 (defn publisher [p]
   (fn this-fn [x]
@@ -106,15 +91,11 @@
     [[] this-fn]))
 
 (defmethod seq-proc :rabbitmq [p1 p2]
-  (let [id (new-id)
-        new-fn (seq-fn (:fn p1) (publisher p2))
+  (let [new-fn (seq-fn (:fn p1) (publisher p2))
         new-parts (merge-with merge
-                              (when (contains? p1 :source)
-                                {(:source p1) {id new-fn}})
                               (:parts p1)
                               (:parts p2))]
     (assoc p1
-      :id id
       :fn new-fn
       :parts new-parts)))
 
@@ -129,11 +110,15 @@
           (ack-message msg)
           [(read-msg msg) this-fn])))))
 
+
 (defmethod reply-proc :rabbitmq [p]
-  (new-proc p
-            (partial (fn this-fn [f [x reply-queue]]
+  (let [id (pr-str (:id p) "_reply")
+        new-fn (partial (fn this-fn [f [x reply-queue]]
                        (let [[new-x new-f] (f x)]
                          (publish reply-queue new-x)
                          [[] (partial this-fn new-f)]))
-                     (:fn p))))
-
+                     (:fn p))]
+    (-> p
+        (assoc-in [:parts (:source p) id] {:fn new-fn})
+        (assoc :id id
+               :fn new-fn))))
