@@ -1,4 +1,4 @@
-(ns test-conduit-rabbitmq
+(ns conduit.test-rabbitmq
   (:use conduit.rabbitmq :reload-all)
   (:use
      clojure.test
