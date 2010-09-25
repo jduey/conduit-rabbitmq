@@ -4,12 +4,13 @@ A library for building distributed apps in Clojure using RabbitMQ
 
 ## Usage
 
+See: http://intensivesystems.net/tutorials/rabbitmq-conduit.html
 
 ## Installation
 
 Add:
 
-[net.intensivesystems/conduit-rabbitmq "0.5.0-SNAPSHOT"]
+[net.intensivesystems/conduit-rabbitmq "0.7.0-SNAPSHOT"]
 
 to project.clj
 
