@@ -1,9 +1,9 @@
 (ns test-conduit-rabbitmq
-  (:use conduit-rabbitmq :reload-all)
+  (:use conduit.rabbitmq :reload-all)
   (:use
      clojure.test
-     conduit
-     arrows)
+     conduit.core
+     arrows.core)
   (:import
      [com.rabbitmq.client ConnectionParameters ConnectionFactory]))
 
@@ -52,15 +52,16 @@
                                    x))))
 
             (deftest test-rabbit-publish-consume
+                     (purge-queue *queue*)
                      (dorun
                        (map (partial publish *queue*)
                             (range 50)))
 
                      (is (= (range 50)
-                            (a-run (a-comp (msg-stream-proc *queue* 100)
-                                           (a-arr (fn [m]
-                                                    (ack-message m)
-                                                    (read-msg m))))))))
+                            (map #(do
+                                    (ack-message %)
+                                    (read-msg %))
+                                 (a-run (msg-stream *queue* 100))))))
 
             (deftest test-rabbitmq-run
                      (dorun
@@ -76,8 +77,8 @@
             (deftest test-seq-proc
                      (let [new-rabbit (a-comp (a-arr inc)
                                               test-rabbit)]
-                       (a-run (a-comp (conduit-seq (range 10))
-                                      new-rabbit))
+                       (conduit-map new-rabbit
+                                    (range 10))
 
                        (reset! test-results [])
                        (rabbitmq-run new-rabbit *queue* *channel* *exchange* 100)
@@ -98,7 +99,9 @@
                          (is (= (map vector
                                      (range 1 11)
                                      (range -1 9))
-                                (conduit-map new-rabbit (range 10))))
+                                (conduit-map (a-comp new-rabbit
+                                                     pass-through)
+                                             (range 10))))
                          (finally
                            (Thread/sleep 500)
                            (.interrupt remote-thread)

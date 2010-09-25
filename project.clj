@@ -1,4 +1,4 @@
-(defproject net.intensivesystems/conduit-rabbitmq "0.6.0-SNAPSHOT"
+(defproject net.intensivesystems/conduit-rabbitmq "0.7.0-SNAPSHOT"
   :description "conduit-rabbitmq: 
                Build distributed applications in Clojure using RabbitMQ"
   :dependencies [[org.clojure/clojure "1.2.0"]
