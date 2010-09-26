@@ -107,20 +107,20 @@
             nil))))))
 
 (defn rabbitmq-run [p queue channel exchange & [msecs]]
-  (binding [*channel* channel
-            *exchange* exchange]
-    (let [queue (str queue)
-          get-next (msg-stream queue msecs)]
-      (when-let [handler-map (get-in p [:parts queue])]
-        (loop [[[raw-msg] get-next] (get-next nil)]
-          (when raw-msg
-            (let [[target msg] (read-msg raw-msg)]
-              (try
-                (let [handler (get handler-map target)
-                      new-handler (if handler
-                                    (second (handler msg))
-                                    handler)]
-                  (ack-message raw-msg)
-                  new-handler))
-              (recur (get-next nil)))))))))
+  (when-let [handler-map (get-in p [:parts queue])]
+    (binding [*channel* channel
+              *exchange* exchange]
+      (let [queue (str queue)
+            handler-fn (reduce comp-fn
+                               [(msg-stream queue msecs)
+                                (partial (fn handler-fn [f msg]
+                                           (try
+                                             (let [new-f (second (f (read-msg msg)))]
+                                               (ack-message msg)
+                                               [[] (partial handler-fn new-f)])
+                                             (catch Exception e
+                                               [[] f])))
+                                         (partial select-fn handler-map))
+                                ])]
+        (dorun (a-run handler-fn))))))
 
