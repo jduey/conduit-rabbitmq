@@ -9,6 +9,11 @@
 (declare *channel*)
 (declare *exchange*)
 
+(defmacro conduit-rabbitmq [channel exchange & body]
+  `(binding [*channel* ~channel
+             *exchange* ~exchange]
+     ~@body))
+
 (defn declare-queue [queue]
   (.queueDeclare *channel* queue false false false false {})
   (.queueBind *channel* queue *exchange* queue))
@@ -110,6 +115,7 @@
   (when-let [handler-map (get-in p [:parts queue])]
     (binding [*channel* channel
               *exchange* exchange]
+      (declare-queue queue)
       (let [queue (str queue)
             handler-fn (reduce comp-fn
                                [(msg-stream queue msecs)

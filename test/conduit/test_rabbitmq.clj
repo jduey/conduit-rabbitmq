@@ -11,7 +11,7 @@
   "Create a simple rabbitmq connection."
   ;; for rabbitmq client 1.7.2
   (let [params (doto (ConnectionParameters.)
-                 (.setVirtualHost "/")
+                 (.setVirtualHost vhost)
                  (.setUsername "guest")
                  (.setPassword "guest"))
         factory (ConnectionFactory. params)]
@@ -70,6 +70,7 @@
                                  (range 10))))
 
                      (reset! test-results [])
+                     (.exchangeDeclare *channel* *exchange* "direct")
                      (rabbitmq-run test-rabbit *queue* *channel* *exchange* 100)
                      (is (= (range 10)
                             @test-results)))
@@ -81,6 +82,7 @@
                                     (range 10))
 
                        (reset! test-results [])
+                       (.exchangeDeclare *channel* *exchange* "direct")
                        (rabbitmq-run new-rabbit *queue* *channel* *exchange* 100)
                        (is (= (range 1 11)
                               @test-results))))
@@ -92,6 +94,7 @@
                            thread-fn (fn [exchange queue]
                                        (with-open [connection (rabbitmq-connection "localhost" "/" "guest" "guest")
                                                    channel (.createChannel connection)]
+                                         (.exchangeDeclare channel exchange "direct")
                                          (rabbitmq-run new-rabbit queue channel exchange)))
                            remote-thread (doto (new Thread (partial thread-fn *exchange* *queue*))
                                            (.start))]
