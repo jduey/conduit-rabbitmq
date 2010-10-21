@@ -85,17 +85,17 @@
   (let [source (str source)
         id (str id)
         reply-id (str id "-reply")]
-    (assoc proc
-           :type :rabbitmq
-           :source source
-           :id id
-           :reply (rabbitmq-pub-reply source reply-id)
-           :no-reply (rabbitmq-pub-no-reply source id)
-           :scatter-gather (rabbitmq-sg-fn source reply-id)
-           :parts (assoc (:parts proc)
-                         source {:type :rabbitmq
-                                 id (:no-reply proc)
-                                 reply-id (reply-fn (:reply proc))}))))
+    {:type :rabbitmq
+     :created-by (:created-by proc)
+     :args (:args proc)
+     :source source
+     :id id
+     :reply (rabbitmq-pub-reply source reply-id)
+     :no-reply (rabbitmq-pub-no-reply source id)
+     :scatter-gather (rabbitmq-sg-fn source reply-id)
+     :parts (assoc (:parts proc)
+                   source {id (:no-reply proc)
+                           reply-id (reply-fn (:reply proc))})}))
 
 (defn msg-stream [queue & [msecs]]
   (let [consumer (consumer queue)]
@@ -111,22 +111,23 @@
           (catch InterruptedException e
             nil))))))
 
+(defn msg-handler-fn [f msg]
+  (try
+    (let [new-f (second (f (read-msg msg)))]
+      (ack-message msg)
+      [[] (partial msg-handler-fn new-f)])
+    (catch Exception e
+      [[] f])))
+
 (defn rabbitmq-run [p queue channel exchange & [msecs]]
   (when-let [handler-map (get-in p [:parts queue])]
     (binding [*channel* channel
               *exchange* exchange]
-      (declare-queue queue)
       (let [queue (str queue)
-            handler-fn (reduce comp-fn
-                               [(msg-stream queue msecs)
-                                (partial (fn handler-fn [f msg]
-                                           (try
-                                             (let [new-f (second (f (read-msg msg)))]
-                                               (ack-message msg)
-                                               [[] (partial handler-fn new-f)])
-                                             (catch Exception e
-                                               [[] f])))
-                                         (partial select-fn handler-map))
-                                ])]
+            select-handler (partial select-fn handler-map)
+            handler-fn (comp-fn (msg-stream queue msecs)
+                                (partial msg-handler-fn
+                                         select-handler))]
+        (declare-queue queue)
         (dorun (a-run handler-fn))))))
 
