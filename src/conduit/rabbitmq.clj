@@ -111,9 +111,13 @@
           (catch InterruptedException e
             nil))))))
 
+(def *conduit-rabbitmq-id* nil)
+
 (defn msg-handler-fn [f msg]
   (try
-    (let [new-f (second (f (read-msg msg)))]
+    (let [[id arg] (read-msg msg)
+          [_ new-f] (binding [*conduit-rabbitmq-id* id]
+                      (f [id arg]))]
       (ack-message msg)
       [[] (partial msg-handler-fn new-f)])
     (catch Exception e
