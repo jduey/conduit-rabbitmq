@@ -1,10 +1,8 @@
 (ns conduit.rabbitmq
-  (:use
-     conduit.core)
-  (:import
-   [com.rabbitmq.client Connection ConnectionFactory Channel
-    MessageProperties QueueingConsumer]
-   [java.util UUID]))
+  (:use conduit.core)
+  (:import [com.rabbitmq.client Connection ConnectionFactory Channel
+            MessageProperties QueueingConsumer]
+           [java.util UUID]))
 
 (declare *channel*)
 (declare *exchange*)
@@ -14,16 +12,19 @@
              *exchange* ~exchange]
      ~@body))
 
-(defn declare-queue [queue]
-  (.queueDeclare *channel* queue false false false false {})
-  (.queueBind *channel* queue *exchange* queue))
+(defn declare-queue
+  ([queue]
+     (declare-queue queue false))
+  ([queue autodelete]
+     (.queueDeclare *channel* queue true false autodelete {})
+     (.queueBind *channel* queue *exchange* queue)))
 
 (defn purge-queue [queue]
   (.queuePurge *channel* queue))
 
 (defn consumer [queue]
   (let [consumer (QueueingConsumer. *channel*)]
-    (.basicConsume *channel* queue, false, consumer)
+    (.basicConsume *channel* queue false consumer)
     consumer))
 
 (defn publish [queue msg]
@@ -34,10 +35,11 @@
                    (.getBytes msg-str))))
 
 (defn get-msg
-  ([queue] (try
-            (.nextDelivery (consumer queue))
-            (catch InterruptedException e
-              nil)))
+  ([queue]
+     (try
+       (.nextDelivery (consumer queue))
+       (catch InterruptedException e
+         nil)))
   ([queue msecs] (.nextDelivery (consumer queue) msecs)))
 
 (defn read-msg [m]
@@ -51,8 +53,7 @@
 (defn rabbitmq-pub-reply [source id]
   (fn rabbitmq-reply [x]
     (let [reply-queue (str (UUID/randomUUID))]
-      (.queueDeclare *channel* reply-queue false false false true {})
-      (.queueBind *channel* reply-queue *exchange* reply-queue)
+      (declare-queue reply-queue true)
       (publish source [id [x reply-queue]])
       (let [msg (get-msg reply-queue)]
         (ack-message msg)
@@ -61,8 +62,7 @@
 (defn rabbitmq-sg-fn [source id]
   (fn rabbitmq-reply [x]
     (let [reply-queue (str (UUID/randomUUID))]
-      (.queueDeclare *channel* reply-queue false false false true {})
-      (.queueBind *channel* reply-queue *exchange* reply-queue)
+      (declare-queue reply-queue true)
       (publish source [id [x reply-queue]])
       (fn []
         (let [msg (get-msg reply-queue)]
@@ -93,35 +93,30 @@
      :reply (rabbitmq-pub-reply source reply-id)
      :no-reply (rabbitmq-pub-no-reply source id)
      :scatter-gather (rabbitmq-sg-fn source reply-id)
-     :parts (assoc (:parts proc)
-                   source {id (:no-reply proc)
-                           reply-id (reply-fn (:reply proc))})}))
+     :parts (merge-with merge (:parts proc)
+                        {source {id (:no-reply proc)
+                                 reply-id (reply-fn (:reply proc))}})}))
 
 (defn msg-stream [queue & [msecs]]
   (let [consumer (consumer queue)]
-    (if msecs
-      (fn this-fn1 [x]
-        (let [msg (.nextDelivery consumer msecs)]
+    (fn stream-reader [x]
+      (try
+        (let [msg (if msecs
+                    (.nextDelivery consumer msecs)
+                    (.nextDelivery consumer))]
           (when msg
-            [[msg] this-fn1])))
-      (fn this-fn2 [x]
-        (try
-          (let [msg (.nextDelivery consumer)]
-            [[msg] this-fn2])
-          (catch InterruptedException e
-            nil))))))
+            [[msg] stream-reader]))
+        (catch InterruptedException e
+          nil)))))
 
 (def *conduit-rabbitmq-id* nil)
 
 (defn msg-handler-fn [f msg]
-  (try
-    (let [[id arg] (read-msg msg)
-          [_ new-f] (binding [*conduit-rabbitmq-id* id]
-                      (f [id arg]))]
-      (ack-message msg)
-      [[] (partial msg-handler-fn new-f)])
-    (catch Exception e
-      [[] f])))
+  (let [[id arg] (read-msg msg)
+        [_ new-f] (binding [*conduit-rabbitmq-id* id]
+                    (f [id arg]))]
+    (ack-message msg)
+    [[] (partial msg-handler-fn new-f)]))
 
 (defn rabbitmq-run [p queue channel exchange & [msecs]]
   (when-let [handler-map (get-in p [:parts queue])]
@@ -134,4 +129,3 @@
                                          select-handler))]
         (declare-queue queue)
         (dorun (a-run handler-fn))))))
-

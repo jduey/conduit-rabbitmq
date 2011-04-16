@@ -5,20 +5,20 @@
      conduit.core
      arrows.core)
   (:import
-     [com.rabbitmq.client ConnectionParameters ConnectionFactory]))
+     [com.rabbitmq.client ConnectionFactory]))
 
 (defn rabbitmq-connection [host vhost user password]
   "Create a simple rabbitmq connection."
   ;; for rabbitmq client 1.7.2
-  (let [params (doto (ConnectionParameters.)
+  #_(let [params (doto (ConnectionParameters.)
                  (.setVirtualHost vhost)
                  (.setUsername "guest")
                  (.setPassword "guest"))
         factory (ConnectionFactory. params)]
     (.newConnection factory "localhost"))
 
-  ;; for rabbitmq client 1.8.0
-  #_(.newConnection
+  ;; for rabbitmq client 2.3.1
+  (.newConnection
     (doto (ConnectionFactory.)
       (.setHost host)
       (.setVirtualHost vhost)
