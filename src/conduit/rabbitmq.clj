@@ -68,7 +68,7 @@
                     reply (get-msg reply-queue)]
                 (ack-message reply)
                 (c (read-msg reply)))))]))
-     (-> (meta p)
+     (-> (meta proc)
         (select-keys [:created-by :args :type])
         (assoc :transport :rabbitmq
                ))))
