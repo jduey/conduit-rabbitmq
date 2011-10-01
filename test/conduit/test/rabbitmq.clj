@@ -27,14 +27,14 @@
               *queue* "test-queue"]
       (.exchangeDeclare channel *exchange* "direct")
       (declare-queue *queue*)
-      (purge-queue *queue*)
+      #_(purge-queue *queue*)
       (f))))
 
-(use-fixtures :each rabbitmq-test-fixture)
+#_(use-fixtures :each rabbitmq-test-fixture)
 
-(def test-results (atom []))
+#_(def test-results (atom []))
 
-(def test-rabbit
+#_(def test-rabbit
   (a-rabbitmq "test-queue"
               "test-rabbit"
               (a-arr (fn [x]
@@ -52,22 +52,25 @@
              (is (= :bogus
                     (read-msg msg))))
 
-           (doseq [v (range 50000)]
+           (doseq [v (range 50)]
              (publish *queue* v))
+           (Thread/sleep 5000)
 
-           (when-let [msg (get-msg *queue* 100)]
+           (when-let [msg (get-msg *queue* 1000)]
              (prn :msg2 msg)
              (ack-message msg)
              (is (= :bogus
                     (read-msg msg))))
 
-           (when-let [msg (get-msg *queue* 100)]
+           (prn :test-1)
+           (when-let [msg (get-msg *queue* 1000)]
              (prn :msg3 msg)
              (ack-message msg)
              (is (= :bogus
                     (read-msg msg))))
 
-           (when-let [msg (get-msg *queue* 100)]
+           (prn :test-2)
+           (when-let [msg (get-msg *queue* 1000)]
              (prn :msg4 msg)
              (ack-message msg)
              (is (= :bogus

@@ -36,8 +36,16 @@
                    (.getBytes msg-str))))
 
 (defn get-msg
-  ([queue] (.nextDelivery (consumer queue)))
-  ([queue msecs] (.nextDelivery (consumer queue) msecs)))
+  ([queue]
+   (try
+     (.nextDelivery (consumer queue))
+     (catch InterruptedException _
+       (println :interrupted-exception))))
+  ([queue msecs]
+   (try
+     (.nextDelivery (consumer queue) msecs)
+     (catch InterruptedException _
+       (println :interrupted-exception)))))
 
 (defn read-msg [m]
   (read-string (String. (.getBody m))))
