@@ -55,28 +55,34 @@
 (defn a-rabbitmq
   ([source id proc] (a-rabbitmq source nil id proc))
   ([source possible-queues id proc]
-   (with-meta
-     (fn curr-fn [x]
-       (let [source (if (fn? source)
-                      (source x)
-                      source)
-             c-queue (str (UUID/randomUUID))]
-         (declare-queue c-queue true)
-         (publish source [[id x] c-queue])
-         [curr-fn
-          (fn [c]
-            (if (nil? c)
-              (publish c-queue nil)
-              (let [reply-queue (str (UUID/randomUUID))
-                    _ (declare-queue reply-queue true)
-                    _ (publish c-queue reply-queue)
-                    reply (get-msg reply-queue)]
-                (ack-message reply)
-                (c (read-msg reply)))))]))
-     (-> (meta proc)
-        (select-keys [:created-by :args :type])
-        (assoc :transport :rabbitmq
-               :parts {source {id proc}})))))
+   (let [parts (->> (if (fn? source)
+                      possible-queues
+                      [source])
+                 (map #(vector % {id proc}))
+                 (into {})
+                 (merge-with merge (:parts (meta proc))))]
+     (with-meta
+       (fn curr-fn [x]
+         (let [source (if (fn? source)
+                        (source x)
+                        source)
+               c-queue (str (UUID/randomUUID))]
+           (declare-queue c-queue true)
+           (publish source [[id x] c-queue])
+           [curr-fn
+            (fn [c]
+              (if (nil? c)
+                (publish c-queue nil)
+                (let [reply-queue (str (UUID/randomUUID))
+                      _ (declare-queue reply-queue true)
+                      _ (publish c-queue reply-queue)
+                      reply (get-msg reply-queue)]
+                  (ack-message reply)
+                  (c (read-msg reply)))))]))
+       (-> (meta proc)
+         (select-keys [:created-by :args :type])
+         (assoc :transport :rabbitmq)
+         (assoc :parts parts))))))
 
 
 (defn wait-for-message [consumer msecs]

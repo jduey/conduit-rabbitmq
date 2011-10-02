@@ -114,29 +114,13 @@
                (.interrupt remote-thread)
                (.join remote-thread 5000)))))
 
-#_(deftest test-test
-         (let [test-proc (a-comp
-                           (a-arr inc)
-                           (a-rabbitmq "bogus-queue"
-                                       "a-double"
-                                       (a-arr (partial * 2))))
-               sel-test (a-comp
-                          (a-all (a-arr even?)
-                                 pass-through)
-                          (a-select true test-proc
-                                    false pass-through))
-               test-fn (test-conduit-fn test-proc)]
-
-           (is (= [8 10 12 14]
-                  (mapcat test-fn (range 3 7))))
-           (is (= [8 10 12 14]
-                  (conduit-map (test-conduit test-proc)
-                               (range 3 7))))
-           (is (= [2 1 6 3 10 5 14]
-                  (conduit-map (test-conduit sel-test)
-                               (range 7))))))
-
-
-
-
-(run-tests)
+(deftest test-a-rabbitmq
+         (is (= {"test-queue" {"pass-through" pass-through}}
+                (:parts (meta (a-rabbitmq
+                                "test-queue" "pass-through"
+                                pass-through)))))
+         (is (= {"q1" {"pass-through" pass-through}
+                 "q2" {"pass-through" pass-through}}
+                (:parts (meta (a-rabbitmq
+                                identity ["q1" "q2"] "pass-through"
+                                pass-through))))))
