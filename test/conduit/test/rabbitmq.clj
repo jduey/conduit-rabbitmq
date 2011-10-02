@@ -27,14 +27,14 @@
               *queue* "test-queue"]
       (.exchangeDeclare channel *exchange* "direct")
       (declare-queue *queue*)
-      #_(purge-queue *queue*)
+      (purge-queue *queue*)
       (f))))
 
-#_(use-fixtures :each rabbitmq-test-fixture)
+(use-fixtures :each rabbitmq-test-fixture)
 
-#_(def test-results (atom []))
+(def test-results (atom []))
 
-#_(def test-rabbit
+(def test-rabbit
   (a-rabbitmq "test-queue"
               "test-rabbit"
               (a-arr (fn [x]
@@ -42,52 +42,22 @@
                        x))))
 
 (deftest test-rabbit-publish-consume
-         (let [*queue* "bogus-queue"]
-           (declare-queue *queue*)
-           (purge-queue *queue*)
-           (publish *queue* :bogus)
-           (let [msg (get-msg *queue* 100)
-                 _ (prn :msg1 msg)
-                 _ (ack-message msg)]
-             (is (= :bogus
-                    (read-msg msg))))
+         (let [consumer (consumer *queue*)]
+           (dorun
+             (map (partial publish *queue*)
+                  (range 50)))
 
-           (doseq [v (range 50)]
-             (publish *queue* v))
-           (Thread/sleep 5000)
+           (is (= (range 50)
+                  (map #(do
+                          (when %
+                            (ack-message %)
+                            (read-msg %)))
+                       (repeatedly 50
+                                   #(wait-for-message consumer 100)))))))
 
-           (when-let [msg (get-msg *queue* 1000)]
-             (prn :msg2 msg)
-             (ack-message msg)
-             (is (= :bogus
-                    (read-msg msg))))
-
-           (prn :test-1)
-           (when-let [msg (get-msg *queue* 1000)]
-             (prn :msg3 msg)
-             (ack-message msg)
-             (is (= :bogus
-                    (read-msg msg))))
-
-           (prn :test-2)
-           (when-let [msg (get-msg *queue* 1000)]
-             (prn :msg4 msg)
-             (ack-message msg)
-             (is (= :bogus
-                    (read-msg msg))))
-
-           #_(is (= (range 50)
-                    (map #(do
-                            (prn :msg2 %)
-                            #_(ack-message %)
-                            (read-msg %))
-                         (repeatedly (partial get-msg *queue* 100)))))))
-
-#_(deftest test-rabbitmq-run
-         (dorun
-           (map (partial publish *queue*)
-                (map (fn [x] [(:id test-rabbit) x])
-                     (range 10))))
+(deftest test-rabbitmq-run
+         (doseq [msg (range 10)]
+           (enqueue test-rabbit msg))
 
          (reset! test-results [])
          (.exchangeDeclare *channel* *exchange* "direct")
@@ -95,35 +65,49 @@
          (is (= (range 10)
                 @test-results)))
 
-#_(deftest test-seq-proc
+(deftest test-seq-proc
          (let [new-rabbit (a-comp (a-arr inc)
-                                  test-rabbit)]
-           (conduit-map new-rabbit
-                        (range 10))
+                                  test-rabbit)
+               thread-fn (fn [exchange queue]
+                           (with-open [connection (rabbitmq-connection
+                                                    "localhost" "/"
+                                                    "guest" "guest")
+                                       channel (.createChannel connection)]
+                             (.exchangeDeclare channel exchange "direct")
+                             (rabbitmq-run new-rabbit queue channel exchange 100)))
+               remote-thread (doto (new Thread (partial thread-fn
+                                                        *exchange* *queue*))
+                               (.start))]
+           (try
+             (reset! test-results [])
+             (dorun (conduit-map new-rabbit (range 10)))
+             (is (= (range 1 11)
+                    @test-results))
+             (finally
+               (Thread/sleep 500)
+               (.interrupt remote-thread)
+               (.join remote-thread 5000)))))
 
-           (reset! test-results [])
-           (.exchangeDeclare *channel* *exchange* "direct")
-           (rabbitmq-run new-rabbit *queue* *channel* *exchange* 100)
-           (is (= (range 1 11)
-                  @test-results))))
-
-#_(deftest test-par-proc
+(deftest test-par-proc
          (let [p1 (a-rabbitmq *queue* "a-inc" (a-arr inc))
                p2 (a-rabbitmq *queue* "a-dec" (a-arr dec))
                new-rabbit (a-all p1 p2)
                thread-fn (fn [exchange queue]
-                           (with-open [connection (rabbitmq-connection "localhost" "/" "guest" "guest")
+                           (Thread/sleep 1000)
+                           (with-open [connection (rabbitmq-connection
+                                                    "localhost" "/"
+                                                    "guest" "guest")
                                        channel (.createChannel connection)]
                              (.exchangeDeclare channel exchange "direct")
                              (rabbitmq-run new-rabbit queue channel exchange)))
-               remote-thread (doto (new Thread (partial thread-fn *exchange* *queue*))
+               remote-thread (doto (new Thread
+                                        (partial thread-fn *exchange* *queue*))
                                (.start))]
            (try
              (is (= (map vector
                          (range 1 11)
                          (range -1 9))
-                    (conduit-map (a-comp new-rabbit
-                                         pass-through)
+                    (conduit-map new-rabbit
                                  (range 10))))
              (finally
                (Thread/sleep 500)

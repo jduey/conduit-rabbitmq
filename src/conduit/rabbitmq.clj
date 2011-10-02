@@ -40,12 +40,9 @@
    (try
      (.nextDelivery (consumer queue))
      (catch InterruptedException _
-       (println :interrupted-exception))))
+       nil)))
   ([queue msecs]
-   (try
-     (.nextDelivery (consumer queue) msecs)
-     (catch InterruptedException _
-       (println :interrupted-exception)))))
+   (.nextDelivery (consumer queue) msecs)))
 
 (defn read-msg [m]
   (read-string (String. (.getBody m))))
@@ -62,7 +59,7 @@
      (fn curr-fn [x]
        (let [source (if (fn? source)
                       (source x)
-                      x)
+                      source)
              c-queue (str (UUID/randomUUID))]
          (declare-queue c-queue true)
          (publish source [[id x] c-queue])
@@ -79,23 +76,7 @@
      (-> (meta proc)
         (select-keys [:created-by :args :type])
         (assoc :transport :rabbitmq
-               ))))
-
-
-  #_(let [source (str source)
-        id (str id)
-        reply-id (str id "-reply")]
-    {:type :rabbitmq
-     :created-by (:created-by proc)
-     :args (:args proc)
-     :source source
-     :id id
-     :reply (rabbitmq-pub-reply source reply-id)
-     :no-reply (rabbitmq-pub-no-reply source id)
-     :scatter-gather (rabbitmq-sg-fn source reply-id)
-     :parts (merge-with merge (:parts proc)
-                        {source {id (:no-reply proc)
-                                 reply-id (reply-fn (:reply proc))}})}))
+               :parts {source {id proc}})))))
 
 
 (defn wait-for-message [consumer msecs]
@@ -109,26 +90,30 @@
 (defn message-handler [selector msecs]
   (fn curr-fn [consumer]
     (try
-      (let [msg (wait-for-message consumer msecs)
-            [conduit-msg c-queue] (read-msg msg)
-            [new-selector new-c] (binding [*conduit-rabbitmq-msg* conduit-msg]
-                                   (selector conduit-msg))
-            reply-queue (read-msg (get-msg c-queue msecs))]
-        (if (nil? reply-queue)
-          (new-c nil)
-          (publish reply-queue (new-c identity)))
-        (ack-message msg)
-        (message-handler new-selector msecs))
-      (catch Throwable _
+      (when-let [msg (wait-for-message consumer msecs)]
+        (let [[conduit-msg c-queue] (read-msg msg)
+              [new-selector new-c] (binding [*conduit-rabbitmq-msg* conduit-msg]
+                                     (selector conduit-msg))
+              reply-queue (read-msg (get-msg c-queue msecs))]
+          (if (nil? reply-queue)
+            (new-c nil)
+            (publish reply-queue (new-c identity)))
+          (ack-message msg)
+          (message-handler new-selector msecs)))
+      (catch InterruptedException _
+        nil)
+      (catch Throwable e
         curr-fn))))
 
 (defn rabbitmq-run [p queue channel exchange & [msecs]]
-  (when-let [handler-map (get-in p [:parts queue])]
+  (when-let [handler-map (get-in (meta p) [:parts queue])]
     (binding [*channel* channel
               *exchange* exchange]
       (let [queue (str queue)
+            msecs (or msecs 100)
+            _ (declare-queue queue)
             selector (select-fn handler-map)
             consumer (consumer queue)]
-        (declare-queue queue)
         (loop [handle-msg (message-handler selector msecs)]
-          (recur (handle-msg consumer)))))))
+          (when handle-msg
+            (recur (handle-msg consumer))))))))
