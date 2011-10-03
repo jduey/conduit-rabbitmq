@@ -99,7 +99,7 @@
                                                     "guest" "guest")
                                        channel (.createChannel connection)]
                              (.exchangeDeclare channel exchange "direct")
-                             (rabbitmq-run new-rabbit queue channel exchange)))
+                             (rabbitmq-run new-rabbit queue channel exchange 100)))
                remote-thread (doto (new Thread
                                         (partial thread-fn *exchange* *queue*))
                                (.start))]

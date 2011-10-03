@@ -35,14 +35,13 @@
                    (MessageProperties/PERSISTENT_TEXT_PLAIN)
                    (.getBytes msg-str))))
 
-(defn get-msg
-  ([queue]
-   (try
-     (.nextDelivery (consumer queue))
-     (catch InterruptedException _
-       nil)))
-  ([queue msecs]
-   (.nextDelivery (consumer queue) msecs)))
+(defn get-msg [queue & [msecs]]
+  (if msecs
+    (.nextDelivery (consumer queue) msecs)
+    (try
+      (.nextDelivery (consumer queue))
+      (catch InterruptedException _
+        nil))))
 
 (defn read-msg [m]
   (read-string (String. (.getBody m))))
@@ -116,7 +115,6 @@
     (binding [*channel* channel
               *exchange* exchange]
       (let [queue (str queue)
-            msecs (or msecs 100)
             _ (declare-queue queue)
             selector (select-fn handler-map)
             consumer (consumer queue)]
