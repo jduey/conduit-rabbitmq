@@ -106,9 +106,7 @@
           (ack-message msg)
           (message-handler new-selector msecs)))
       (catch InterruptedException _
-        nil)
-      (catch Throwable e
-        curr-fn))))
+        nil))))
 
 (defn rabbitmq-run [p queue channel exchange & [msecs]]
   (when-let [handler-map (get-in (meta p) [:parts queue])]
